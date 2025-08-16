@@ -1,63 +1,74 @@
-from flask import Flask, request, jsonify
+import streamlit as st
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# -----------------
-# Load and prepare data
-# -----------------
-df = pd.read_csv("pet_disease_dataset_300.csv")
-df['Symptom (User Input)'] = df['Symptom (User Input)'].str.lower().str.strip()
-df['Animal'] = df['Animal'].str.lower().str.strip()
+# ----------------------------
+# Load Dataset
+# ----------------------------
+@st.cache_data
+def load_data():
+    df = pd.read_csv("pet_disease_dataset_300.csv")
+    # Ensure proper column names
+    df.columns = df.columns.str.strip()
+    return df
 
-vectorizer = TfidfVectorizer()
-vectorizer.fit(df['Symptom (User Input)'])
+df = load_data()
 
-# -----------------
-# Flask app setup
-# -----------------
-app = Flask(__name__)
+# ----------------------------
+# TF-IDF Vectorization
+# ----------------------------
+@st.cache_resource
+def build_tfidf_model(symptoms):
+    vectorizer = TfidfVectorizer(stop_words="english")
+    vectors = vectorizer.fit_transform(symptoms)
+    return vectorizer, vectors
 
-def get_diagnosis(user_input, animal_type=None):
-    # Preprocess
-    user_input_clean = user_input.lower().strip()
-    
-    # Filter by animal
-    if animal_type:
-        filtered_df = df[df['Animal'] == animal_type.lower()]
+vectorizer, vectors = build_tfidf_model(df["symptoms"].astype(str))
+
+# ----------------------------
+# Function: Find Most Similar Disease
+# ----------------------------
+def predict_disease(user_input):
+    user_vec = vectorizer.transform([user_input])
+    similarity = cosine_similarity(user_vec, vectors).flatten()
+    idx = similarity.argmax()
+    return df.iloc[idx], similarity[idx]
+
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+st.set_page_config(
+    page_title="🐾 Pet Disease Predictor",
+    page_icon="🐶",
+    layout="wide"
+)
+
+st.title("🐾 Pet Disease & Home Treatment Predictor")
+st.markdown(
+    """
+    Enter your pet's symptoms below, and our system will suggest the **most likely disease**  
+    along with **home treatment advice**.  
+    """
+)
+
+# Input box
+user_input = st.text_area("✍️ Describe your pet's symptoms:", height=150)
+
+if st.button("🔍 Predict Disease"):
+    if user_input.strip():
+        result, score = predict_disease(user_input)
+
+        st.success(f"**Predicted Disease:** {result['disease']}")
+        st.info(f"**Home Treatment Advice:** {result['treatment']}")
+
+        st.write("---")
+        st.caption(f"🔎 Similarity Score: {score:.2f}")
     else:
-        filtered_df = df.copy()
-    
-    if filtered_df.empty:
-        return None
-    
-    # Vectorize
-    filtered_vectors = vectorizer.transform(filtered_df['Symptom (User Input)'])
-    user_vector = vectorizer.transform([user_input_clean])
-    
-    # Similarity
-    similarities = cosine_similarity(user_vector, filtered_vectors).flatten()
-    best_idx = similarities.argmax()
-    best_row = filtered_df.iloc[best_idx]
-    
-    return {
-        "animal": best_row['Animal'].title(),
-        "disease": best_row['Disease'],
-        "treatment": best_row['Home Treatment (User-Friendly)'],
-        "confidence": round(float(similarities[best_idx]), 2)
-    }
+        st.warning("⚠️ Please enter some symptoms to get a prediction.")
 
-@app.route("/diagnose", methods=["POST"])
-def diagnose():
-    data = request.json
-    user_input = data.get("symptoms", "")
-    animal_type = data.get("animal", None)
-    
-    result = get_diagnosis(user_input, animal_type)
-    if not result:
-        return jsonify({"error": "No matching data"}), 404
-    
-    return jsonify(result)
-
-if __name__ == "__main__":
-    app.run(debug=True)
+# ----------------------------
+# Extra Section
+# ----------------------------
+with st.expander("📂 View Dataset Sample"):
+    st.dataframe(df.head(10))
